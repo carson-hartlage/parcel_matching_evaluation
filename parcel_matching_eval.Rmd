@@ -1,0 +1,156 @@
+---
+title: "parcel_matching_evaluation"
+author: "Carson Hartlage"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+        toc: true
+        toc_float:
+            collapsed: false
+            smooth_scroll: true
+        code_download: true
+        code_folding: hide
+        highlight: pygments
+        df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library(addr)
+library(dplyr)
+library(purrr)
+library(sf)
+```
+
+## Load in and prepare data
+
+```{r}
+d <- qs::qread("~/Documents/GitHub/parcel_matching_methods_evaluation/data/geomatched_NAD_to_parcels.qs")
+d <- d |>
+  mutate(
+    addr_matched_parcel_id = map_chr(
+      cagis_addr_data,
+      ~ if (is.null(.x) || nrow(.x) == 0) {
+        NA_character_
+      } else {
+        sample(.x$cagis_parcel_id, 1)
+      }
+    )
+  )
+
+frank <- filter(d, county == "Franklin, OH")
+
+ham <- filter(d, county == "Hamilton, OH")
+ham <- ham |>
+  mutate(
+    addr_matched_parcel_id = paste0(sub("^0", "", addr_matched_parcel_id), "00")
+  )
+
+hamilton_parcels <-
+  dpkg::stow("gh://geomarker-io/parcel/cagis_parcels-v1.1.1") |>
+  arrow::read_parquet() |>
+  select(parcel_id, land_use)
+
+ham <- ham |>
+  left_join(hamilton_parcels, join_by(addr_matched_parcel_id == parcel_id)) |>
+  rename(addr_matched_parcel_land_use = land_use)
+
+lu_keepers <-
+  c(
+    "single family dwelling" = "510",
+    "two family dwelling" = "520",
+    "three family dwelling" = "530",
+    "condominium unit" = "550",
+    "apartment, 4-19 units" = "401",
+    "apartment, 20-39 units" = "402",
+    "apartment, 40+ units" = "403",
+    "mobile home / trailer park" = "415",
+    "other commercial housing" = "419",
+    "office / apartment over" = "431",
+    "boataminium" = "551",
+    "landominium" = "555",
+    "manufactured home" = "560",
+    "other residential structure" = "599",
+    "condo or pud garage" = "552",
+    "metropolitan housing authority" = "645",
+    "lihtc res" = "569"
+  )
+lu_map <- setNames(names(lu_keepers), lu_keepers)
+franklin_parcels <-
+  paste0(
+    "/vsizip/",
+    dpkg::stow(
+      "https://apps.franklincountyauditor.com/GIS_Shapefiles/CurrentExtracts/20251008_Parcel_Polygons.zip"
+    )
+  ) |>
+  read_sf() |>
+  st_drop_geometry() |>
+  filter(CLASSCD %in% lu_keepers) |>
+  select(parcel_id = PARCELID, land_use = CLASSCD) |>
+  mutate(land_use = recode(land_use, !!!lu_map))
+
+frank <- frank |>
+  left_join(franklin_parcels, join_by(addr_matched_parcel_id == parcel_id)) |>
+  rename(addr_matched_parcel_land_use = land_use)
+```
+
+## Match and Agreement Rates
+
+```{r, echo=FALSE}
+rates <- data.frame(
+  county = c(
+    rep("Hamilton", 3),
+    rep("Franklin", 3)),
+  method = rep(c("addr", "NAD_geo", "DeGAUSS_geo"), 2),
+  match_rate = c(
+    length(which(!is.na(ham$cagis_addr)))/nrow(ham),
+    length(which(!is.na(ham$nad_closest_parcel_id)))/nrow(ham),
+    length(which(!is.na(ham$degauss_closest_parcel_id)))/nrow(ham),
+    length(which(!is.na(frank$cagis_addr)))/nrow(frank),
+    length(which(!is.na(frank$nad_closest_parcel_id)))/nrow(frank),
+    length(which(!is.na(frank$degauss_closest_parcel_id)))/nrow(frank)
+    ),
+  parcel_id_agreement_with_addr = c(
+    1,
+    length(which(ham$nad_closest_parcel_id != ham$addr_matched_parcel_id))/nrow(ham),
+    length(which(ham$degauss_closest_parcel_id == ham$addr_matched_parcel_id))/nrow(ham),
+    1,
+    length(which(frank$nad_closest_parcel_id != frank$addr_matched_parcel_id))/nrow(frank),
+    length(which(frank$degauss_closest_parcel_id == frank$addr_matched_parcel_id))/nrow(frank)
+  ),
+  land_use_agreement_with_addr = c(
+    1,
+    length(which(ham$nad_closest_parcel_land_use == ham$addr_matched_parcel_land_use))/nrow(ham),
+    length(which(ham$degauss_closest_parcel_land_use == ham$addr_matched_parcel_land_use))/nrow(ham),
+    1,
+    length(which(frank$nad_closest_parcel_land_use == frank$addr_matched_parcel_land_use))/nrow(frank),
+    length(which(frank$degauss_closest_parcel_land_use == frank$addr_matched_parcel_land_use))/nrow(frank)
+  )
+)
+
+knitr::kable(rates)
+```
+
+```{r}
+# rate of addr multi-matches
+sum(map_int(ham$cagis_addr_data, ~ if (is.null(.) || length(.) == 0) 0 else nrow(.)) > 1)/nrow(ham)
+sum(map_int(frank$cagis_addr_data, ~ if (is.null(.) || length(.) == 0) 0 else nrow(.)) > 1)/nrow(frank)
+
+# mean distance to closest parcel centroid
+mean(ham$nad_dist_to_closest_parcel)
+mean(ham$degauss_dist_to_closest_parcel, na.rm=TRUE)
+mean(frank$nad_dist_to_closest_parcel)
+mean(frank$degauss_dist_to_closest_parcel, na.rm=TRUE)
+
+# land use agreement between NAD and DeGAUSS
+length(which(ham$nad_closest_parcel_land_use == ham$degauss_closest_parcel_land_use))/nrow(ham)
+length(which(frank$nad_closest_parcel_land_use == frank$degauss_closest_parcel_land_use))/nrow(frank)
+
+# not matched at all - exclude from stats?
+length(which(!is.na(ham$cagis_addr) & !is.na(ham$nad_closest_parcel_id) & !is.na(ham$degauss_closest_parcel_id)))/nrow(ham)
+length(which(!is.na(frank$cagis_addr) & !is.na(frank$nad_closest_parcel_id) & !is.na(frank$degauss_closest_parcel_id)))/nrow(frank)
+```
+
+```{r}
+
+```
