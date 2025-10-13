@@ -17,6 +17,7 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
 library(addr)
+library(units)
 library(dplyr)
 library(purrr)
 library(sf)
@@ -26,97 +27,27 @@ library(ggplot2)
 ## Load in & prepare data
 
 ```{r}
-d <- qs::qread("~/Documents/GitHub/parcel_matching_methods_evaluation/data/geomatched_NAD_to_parcels.qs")
-d <- d |>
-  mutate(
-    addr_matched_parcel_id = map_chr(
-      cagis_addr_data,
-      ~ if (is.null(.x) || nrow(.x) == 0) {
-        NA_character_
-      } else {
-        sample(.x$cagis_parcel_id, 1)
-      }
-    )
-  )
+d <- readRDS("~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_10.13.25.rds")
 
-frank <- filter(d, county == "Franklin, OH")
+# d <- qs::qread("~/Documents/GitHub/parcel_matching_methods_evaluation/data/geomatched_NAD_to_parcels.qs")
+# d <- d |>
+#   mutate(
+#     addr_matched_parcel_id = map_chr(
+#       cagis_addr_data,
+#       ~ if (is.null(.x) || nrow(.x) == 0) {
+#         NA_character_
+#       } else {
+#         sample(.x$cagis_parcel_id, 1)
+#       }
+#     )
+#   )
 
-ham <- filter(d, county == "Hamilton, OH")
-ham <- ham |>
-  mutate(
-    addr_matched_parcel_id = paste0(sub("^0", "", addr_matched_parcel_id), "00")
-  )
-
-hamilton_parcels <-
-  dpkg::stow("gh://geomarker-io/parcel/cagis_parcels-v1.1.1") |>
-  arrow::read_parquet() |>
-  select(parcel_id, land_use, market_total_value)
-
-ham <- ham |>
-  left_join(hamilton_parcels, join_by(addr_matched_parcel_id == parcel_id)) |>
-  rename(addr_matched_parcel_land_use = land_use,
-         addr_matched_parcel_value = market_total_value) |>
-  left_join(hamilton_parcels, join_by(nad_closest_parcel_id == parcel_id)) |>
-  rename(nad_closest_parcel_value = market_total_value) |>
-  left_join(hamilton_parcels, join_by(degauss_closest_parcel_id == parcel_id)) |>
-  rename(degauss_closest_parcel_value = market_total_value) |>
-  select(-c(land_use.x, land_use.y)) |>
-  mutate(addr_matched_parcel_id = ifelse(is.na(addr_matched_parcel_land_use), NA, addr_matched_parcel_id))
-
-lu_keepers <-
-  c(
-    "single family dwelling" = "510",
-    "two family dwelling" = "520",
-    "three family dwelling" = "530",
-    "condominium unit" = "550",
-    "apartment, 4-19 units" = "401",
-    "apartment, 20-39 units" = "402",
-    "apartment, 40+ units" = "403",
-    "mobile home / trailer park" = "415",
-    "other commercial housing" = "419",
-    "office / apartment over" = "431",
-    "boataminium" = "551",
-    "landominium" = "555",
-    "manufactured home" = "560",
-    "other residential structure" = "599",
-    "condo or pud garage" = "552",
-    "metropolitan housing authority" = "645",
-    "lihtc res" = "569"
-  )
-lu_map <- setNames(names(lu_keepers), lu_keepers)
-franklin_parcels <-
-  paste0(
-    "/vsizip/",
-    dpkg::stow(
-      "https://apps.franklincountyauditor.com/GIS_Shapefiles/CurrentExtracts/20251008_Parcel_Polygons.zip"
-    )
-  ) |>
-  read_sf() |>
-  st_drop_geometry() |>
-  filter(CLASSCD %in% lu_keepers) |>
-  select(parcel_id = PARCELID, land_use = CLASSCD) |>
-  mutate(land_use = recode(land_use, !!!lu_map))
-
-f2 <- readr::read_csv("https://apps.franklincountyauditor.com/Parcel_CSV/2025/07/Parcel.csv")
-f2 <- f2 |>
-  select(parcel_id = "PARCEL ID",
-         appraised_total_value = APPRTOT) |>
-  mutate(appraised_total_value = as.numeric(appraised_total_value))
-  
-
-frank <- frank |>
-  left_join(franklin_parcels, join_by(addr_matched_parcel_id == parcel_id)) |>
-  rename(addr_matched_parcel_land_use = land_use) |>
-  left_join(f2, join_by(addr_matched_parcel_id == parcel_id)) |>
-  rename(addr_matched_parcel_value = appraised_total_value) |>
-  left_join(f2, join_by(nad_closest_parcel_id == parcel_id)) |>
-  rename(nad_closest_parcel_value = appraised_total_value) |>
-  left_join(f2, join_by(degauss_closest_parcel_id == parcel_id)) |>
-  rename(degauss_closest_parcel_value = appraised_total_value) |>
-  mutate(addr_matched_parcel_id = ifelse(is.na(addr_matched_parcel_land_use), NA, addr_matched_parcel_id))
+frank <- filter(d, county == "Franklin")
+ham <- filter(d, county == "Hamilton")
 ```
 
 ## Match & agreement rates
+### No distance threshold
 ```{r}
 agreement_equal <- function(col1, col2) {
   both_na <- is.na(col1) & is.na(col2)
@@ -172,7 +103,172 @@ value_20_agree_with_addr = c(
   1,
   agreement_threshold(frank$nad_closest_parcel_value, frank$addr_matched_parcel_value) / nrow(frank),
   agreement_threshold(frank$degauss_closest_parcel_value, frank$addr_matched_parcel_value) / nrow(frank)
+  )
 )
+
+# rates_long <- rates |>
+#   tidyr::pivot_longer(
+#     cols = c(match_rate, parcel_id_agree_with_addr, land_use_agree_with_addr, value_20_agree_with_addr),
+#     names_to = "metric",
+#     values_to = "value"
+#   )
+
+knitr::kable(rates)
+```
+
+### 100m
+```{r}
+threshold_ft <- 328.08333333
+
+library(dplyr)
+
+ham <- ham |>
+  mutate(
+    across(c(nad_dist_to_closest_parcel, degauss_dist_to_closest_parcel), as.numeric),
+    
+    nad_closest_parcel_id = if_else(nad_dist_to_closest_parcel <= threshold_ft, nad_closest_parcel_id, NA_character_),
+    degauss_closest_parcel_id = if_else(degauss_dist_to_closest_parcel <= threshold_ft, degauss_closest_parcel_id, NA_character_),
+    
+    across(c(nad_closest_parcel_land_use, nad_closest_parcel_value),
+           ~ if_else(is.na(nad_closest_parcel_id), NA, .x)),
+    across(c(degauss_closest_parcel_land_use, degauss_closest_parcel_value),
+           ~ if_else(is.na(degauss_closest_parcel_id), NA, .x))
+  )
+
+
+frank <- frank |>
+  mutate(
+    across(c(nad_dist_to_closest_parcel, degauss_dist_to_closest_parcel), as.numeric),
+    
+    nad_closest_parcel_id = if_else(nad_dist_to_closest_parcel <= threshold_ft, nad_closest_parcel_id, NA_character_),
+    degauss_closest_parcel_id = if_else(degauss_dist_to_closest_parcel <= threshold_ft, degauss_closest_parcel_id, NA_character_),
+    
+    across(c(nad_closest_parcel_land_use, nad_closest_parcel_value),
+           ~ if_else(is.na(nad_closest_parcel_id), NA, .x)),
+    across(c(degauss_closest_parcel_land_use, degauss_closest_parcel_value),
+           ~ if_else(is.na(degauss_closest_parcel_id), NA, .x))
+  )
+
+rates <- data.frame(
+  county = c(rep("Hamilton", 3), rep("Franklin", 3)),
+  method = rep(c("addr", "NAD_geo", "DeGAUSS_geo"), 2),
+
+  match_rate = c(
+    sum(!is.na(ham$addr_matched_parcel_id)) / nrow(ham),
+    sum(!is.na(ham$nad_closest_parcel_id)) / nrow(ham),
+    sum(!is.na(ham$degauss_closest_parcel_id)) / nrow(ham),
+    sum(!is.na(frank$addr_matched_parcel_id)) / nrow(frank),
+    sum(!is.na(frank$nad_closest_parcel_id)) / nrow(frank),
+    sum(!is.na(frank$degauss_closest_parcel_id)) / nrow(frank)
+  ),
+
+  parcel_id_agree_with_addr = c(
+    1,
+    agreement_equal(ham$nad_closest_parcel_id, ham$addr_matched_parcel_id) / nrow(ham),
+    agreement_equal(ham$degauss_closest_parcel_id, ham$addr_matched_parcel_id) / nrow(ham),
+    1,
+    agreement_equal(frank$nad_closest_parcel_id, frank$addr_matched_parcel_id) / nrow(frank),
+    agreement_equal(frank$degauss_closest_parcel_id, frank$addr_matched_parcel_id) / nrow(frank)
+  ),
+
+  land_use_agree_with_addr = c(
+    1,
+    agreement_equal(ham$nad_closest_parcel_land_use, ham$addr_matched_parcel_land_use) / nrow(ham),
+    agreement_equal(ham$degauss_closest_parcel_land_use, ham$addr_matched_parcel_land_use) / nrow(ham),
+    1,
+    agreement_equal(frank$nad_closest_parcel_land_use, frank$addr_matched_parcel_land_use) / nrow(frank),
+    agreement_equal(frank$degauss_closest_parcel_land_use, frank$addr_matched_parcel_land_use) / nrow(frank)
+  ),
+
+value_20_agree_with_addr = c(
+  1,
+  agreement_threshold(ham$nad_closest_parcel_value, ham$addr_matched_parcel_value) / nrow(ham),
+  agreement_threshold(ham$degauss_closest_parcel_value, ham$addr_matched_parcel_value) / nrow(ham),
+  1,
+  agreement_threshold(frank$nad_closest_parcel_value, frank$addr_matched_parcel_value) / nrow(frank),
+  agreement_threshold(frank$degauss_closest_parcel_value, frank$addr_matched_parcel_value) / nrow(frank)
+  )
+)
+
+rates_long <- rates |>
+  tidyr::pivot_longer(
+    cols = c(match_rate, parcel_id_agree_with_addr, land_use_agree_with_addr, value_20_agree_with_addr),
+    names_to = "metric",
+    values_to = "value"
+  )
+
+knitr::kable(rates)
+```
+
+### 50m
+```{r}
+threshold_ft <- 164.04166667
+
+ham <- ham |>
+  mutate(
+    across(c(nad_dist_to_closest_parcel, degauss_dist_to_closest_parcel), as.numeric),
+    
+    nad_closest_parcel_id = if_else(nad_dist_to_closest_parcel <= threshold_ft, nad_closest_parcel_id, NA_character_),
+    degauss_closest_parcel_id = if_else(degauss_dist_to_closest_parcel <= threshold_ft, degauss_closest_parcel_id, NA_character_),
+    
+    across(c(nad_closest_parcel_land_use, nad_closest_parcel_value),
+           ~ if_else(is.na(nad_closest_parcel_id), NA, .x)),
+    across(c(degauss_closest_parcel_land_use, degauss_closest_parcel_value),
+           ~ if_else(is.na(degauss_closest_parcel_id), NA, .x))
+  )
+
+frank <- frank |>
+  mutate(
+    across(c(nad_dist_to_closest_parcel, degauss_dist_to_closest_parcel), as.numeric),
+    
+    nad_closest_parcel_id = if_else(nad_dist_to_closest_parcel <= threshold_ft, nad_closest_parcel_id, NA_character_),
+    degauss_closest_parcel_id = if_else(degauss_dist_to_closest_parcel <= threshold_ft, degauss_closest_parcel_id, NA_character_),
+    
+    across(c(nad_closest_parcel_land_use, nad_closest_parcel_value),
+           ~ if_else(is.na(nad_closest_parcel_id), NA, .x)),
+    across(c(degauss_closest_parcel_land_use, degauss_closest_parcel_value),
+           ~ if_else(is.na(degauss_closest_parcel_id), NA, .x))
+  )
+
+rates <- data.frame(
+  county = c(rep("Hamilton", 3), rep("Franklin", 3)),
+  method = rep(c("addr", "NAD_geo", "DeGAUSS_geo"), 2),
+
+  match_rate = c(
+    sum(!is.na(ham$addr_matched_parcel_id)) / nrow(ham),
+    sum(!is.na(ham$nad_closest_parcel_id)) / nrow(ham),
+    sum(!is.na(ham$degauss_closest_parcel_id)) / nrow(ham),
+    sum(!is.na(frank$addr_matched_parcel_id)) / nrow(frank),
+    sum(!is.na(frank$nad_closest_parcel_id)) / nrow(frank),
+    sum(!is.na(frank$degauss_closest_parcel_id)) / nrow(frank)
+  ),
+
+  parcel_id_agree_with_addr = c(
+    1,
+    agreement_equal(ham$nad_closest_parcel_id, ham$addr_matched_parcel_id) / nrow(ham),
+    agreement_equal(ham$degauss_closest_parcel_id, ham$addr_matched_parcel_id) / nrow(ham),
+    1,
+    agreement_equal(frank$nad_closest_parcel_id, frank$addr_matched_parcel_id) / nrow(frank),
+    agreement_equal(frank$degauss_closest_parcel_id, frank$addr_matched_parcel_id) / nrow(frank)
+  ),
+
+  land_use_agree_with_addr = c(
+    1,
+    agreement_equal(ham$nad_closest_parcel_land_use, ham$addr_matched_parcel_land_use) / nrow(ham),
+    agreement_equal(ham$degauss_closest_parcel_land_use, ham$addr_matched_parcel_land_use) / nrow(ham),
+    1,
+    agreement_equal(frank$nad_closest_parcel_land_use, frank$addr_matched_parcel_land_use) / nrow(frank),
+    agreement_equal(frank$degauss_closest_parcel_land_use, frank$addr_matched_parcel_land_use) / nrow(frank)
+  ),
+
+value_20_agree_with_addr = c(
+  1,
+  agreement_threshold(ham$nad_closest_parcel_value, ham$addr_matched_parcel_value) / nrow(ham),
+  agreement_threshold(ham$degauss_closest_parcel_value, ham$addr_matched_parcel_value) / nrow(ham),
+  1,
+  agreement_threshold(frank$nad_closest_parcel_value, frank$addr_matched_parcel_value) / nrow(frank),
+  agreement_threshold(frank$degauss_closest_parcel_value, frank$addr_matched_parcel_value) / nrow(frank)
+  )
 )
 
 knitr::kable(rates)
@@ -180,24 +276,12 @@ knitr::kable(rates)
 
 ```{r}
 # rate of addr multi-matches
-sum(map_int(ham$cagis_addr_data, ~ if (is.null(.) || length(.) == 0) 0 else nrow(.)) > 1)/nrow(ham)
-sum(map_int(frank$cagis_addr_data, ~ if (is.null(.) || length(.) == 0) 0 else nrow(.)) > 1)/nrow(frank)
+# sum(map_int(ham$cagis_addr_data, ~ if (is.null(.) || length(.) == 0) 0 else nrow(.)) > 1)/nrow(ham)
+# sum(map_int(frank$cagis_addr_data, ~ if (is.null(.) || length(.) == 0) 0 else nrow(.)) > 1)/nrow(frank)
 
-# mean distance to closest parcel centroid
-mean(ham$nad_dist_to_closest_parcel)
-mean(ham$degauss_dist_to_closest_parcel, na.rm=TRUE)
-mean(frank$nad_dist_to_closest_parcel)
-mean(frank$degauss_dist_to_closest_parcel, na.rm=TRUE)
-
-# land use agreement between NAD and DeGAUSS
-length(which(ham$nad_closest_parcel_land_use == ham$degauss_closest_parcel_land_use))/nrow(ham)
-length(which(frank$nad_closest_parcel_land_use == frank$degauss_closest_parcel_land_use))/nrow(frank)
-
-# non-residential matches (addr matched but no land use)
-sum(!is.na(ham$cagis_addr) & is.na(ham$addr_matched_parcel_land_use))/nrow(ham)
-sum(!is.na(frank$cagis_addr) & is.na(frank$addr_matched_parcel_land_use))/nrow(frank)
 ```
-
+## Land use agreement matrices
+### No distance threshold
 ```{r}
 df <- ham %>%
   mutate(
