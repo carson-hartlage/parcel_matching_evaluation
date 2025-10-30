@@ -56,9 +56,72 @@ d <- d |>
       length(val) > 0
     })
   )
-# what to do about multi-matches?
+# multi-matches?
+# marge parcel ids
+d <- d |>
+  mutate(cagis_addr = as_addr(cagis_addr)) |>
+  left_join(d_cagis, by = "cagis_addr") 
+d2 <- d |>
+  unnest(cagis_addr_data)
 
-saveRDS(d, )
+saveRDS(d, "~/Documents/GitHub/parcel_matching_evaluation/RISEUP_matched_data_10.13.25.rds")
 
 # PEAS
 #d <- readRDS("/Users/carsonhartlage/Desktop/PhD/PEAS_pe_encounters_v0.3.rds")
+
+
+# OMOP data
+o <- readRDS("/Users/carsonhartlage/Desktop/PhD/Parcel Matching/omop_testing-n_people_per_addr.rds")
+o <- o |>
+  filter(zip_code %in% cincy::zcta_tigris_2020$zcta_2020) |>
+  mutate(inst_address = dht::address_is_institutional(as.character(addr))) |>
+  filter(inst_address==FALSE) |>
+  select(-c(inst_address)) 
+
+o$cagis_addr <- o$addr |>
+  addr_match(d_cagis$cagis_addr)
+
+o <- o |>
+  filter(
+    map_lgl(cagis_addr, ~ {
+      if (is.null(.x) || length(.x) == 0) return(FALSE)
+      val <- as.character(.x)
+      val <- val[!is.na(val) & val != ""]
+      length(val) > 0
+    })
+  )
+
+o <- o |>
+  unnest(cagis_addr) |>
+  mutate(cagis_addr = as_addr(cagis_addr)) |>
+  left_join(d_cagis, by = "cagis_addr") |>
+  unnest(cagis_addr_data)
+
+o_summary <- o |>
+  group_by(cagis_parcel_id) |>
+  summarise(n_pts = mean(n_people)) |>
+  ungroup()
+
+saveRDS(o, "~/Documents/GitHub/parcel_matching_evaluation/OMOP_matched_data_10.15.25.rds")
+saveRDS(o_summary, "~/Documents/GitHub/parcel_matching_evaluation/OMOP_summarized_data_10.15.25.rds")
+
+
+
+######
+
+library(yardstick)
+
+metric_set(accuracy, sens, spec) %>%
+  map(~ .x(
+    truth = eval_data$true_parcel_id,
+    estimate = eval_data$matched_parcel_id,
+    case_weights = eval_data$freq
+  ))
+
+eval_data <- eval_data %>%
+  mutate(correct_match = if_else(true_parcel_id == matched_parcel_id, 1, 0))
+weighted_agreement <- sum(eval_data$correct_match * eval_data$freq) /
+  sum(eval_data$freq)
+
+weighted_agreement
+
