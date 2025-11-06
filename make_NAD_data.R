@@ -3,6 +3,7 @@ library(purrr)
 library(tidyr)
 library(sf)
 library(ham)
+library(addr)
 
 d <- qs::qread("/Users/carsonhartlage/Documents/GitHub/parcel_matching_evaluation/geomatched_NAD_to_parcels.qs") |>
   select(-c(degauss_which_intersects_parcel, degauss_which_closest_parcel, nad_which_intersects_parcel, nad_which_closest_parcel))
@@ -83,6 +84,7 @@ franklin_parcels <-
   st_drop_geometry() |>
   filter(CLASSCD %in% lu_keepers) |>
   select(parcel_id = PARCELID, land_use = CLASSCD) |>
+  mutate(land_use = as.character(land_use)) |>
   mutate(land_use = recode(land_use, !!!lu_map))
 
 f2 <- readr::read_csv("https://apps.franklincountyauditor.com/Parcel_CSV/2025/07/Parcel.csv")
@@ -102,14 +104,21 @@ frank <- frank |>
   rename(degauss_closest_parcel_value = appraised_total_value) |>
   mutate(addr_matched_parcel_id = ifelse(is.na(addr_matched_parcel_land_use), NA, addr_matched_parcel_id))
 
-# join back together
-# all <- rbind(ham, frank)
+frank <- frank %>%
+  mutate(
+    degauss_intersects_parcel_land_use = map(degauss_intersects_parcel_land_use, ~ as.character(.x)),
+    nad_intersects_parcel_land_use = map(nad_intersects_parcel_land_use, ~ as.character(.x)),
+    addr_matched_parcel_land_use = as.character(addr_matched_parcel_land_use),
+    nad_closest_parcel_land_use = as.character(nad_closest_parcel_land_use),
+    degauss_closest_parcel_land_use = as.character(degauss_closest_parcel_land_use)
+  )
 
 getMode <- function(x) {
+  x <- x[!is.na(x)]  # drop NA
+  if(length(x) == 0) return(NA_character_)
   ux <- unique(x)
   tab <- tabulate(match(x, ux))
-  max_tab <- max(tab)
-  modes <- ux[tab == max_tab]
+  modes <- ux[tab == max(tab)]
   sample(modes, 1)
 }
 #####
@@ -137,13 +146,10 @@ ham <- ham %>%
     degauss_closest_parcel_value = first(degauss_closest_parcel_value),
     degauss_dist_to_closest_parcel = first(degauss_dist_to_closest_parcel),
     
-    nad_intersects_parcel_id = list(nad_intersects_parcel_id),
-    nad_intersects_parcel_land_use = list(nad_intersects_parcel_land_use),
-    degauss_intersects_parcel_id = list(degauss_intersects_parcel_id),
-    degauss_intersects_parcel_land_use = list(degauss_intersects_parcel_land_use),
-    
-    nad_intersects_parcel_id = list(nad_intersects_parcel_id),
-    degauss_intersects_parcel_id = list(degauss_intersects_parcel_id),
+    nad_intersects_parcel_id = list(unlist(nad_intersects_parcel_id, recursive = TRUE, use.names = FALSE)),
+    nad_intersects_parcel_land_use = list(unlist(nad_intersects_parcel_land_use, recursive = TRUE, use.names = FALSE)),
+    degauss_intersects_parcel_id = list(unlist(degauss_intersects_parcel_id, recursive = TRUE, use.names = FALSE)),
+    degauss_intersects_parcel_land_use = list(unlist(degauss_intersects_parcel_land_use, recursive = TRUE, use.names = FALSE)),
     
     .groups = "drop"
   )
@@ -172,10 +178,10 @@ frank <- frank %>%
     degauss_closest_parcel_value = first(degauss_closest_parcel_value),
     degauss_dist_to_closest_parcel = first(degauss_dist_to_closest_parcel),
     
-    nad_intersects_parcel_id = list(nad_intersects_parcel_id),
-    nad_intersects_parcel_land_use = list(nad_intersects_parcel_land_use),
-    degauss_intersects_parcel_id = list(degauss_intersects_parcel_id),
-    degauss_intersects_parcel_land_use = list(degauss_intersects_parcel_land_use),
+    nad_intersects_parcel_id = list(unlist(nad_intersects_parcel_id, recursive = TRUE, use.names = FALSE)),
+    nad_intersects_parcel_land_use = list(unlist(nad_intersects_parcel_land_use, recursive = TRUE, use.names = FALSE)),
+    degauss_intersects_parcel_id = list(unlist(degauss_intersects_parcel_id, recursive = TRUE, use.names = FALSE)),
+    degauss_intersects_parcel_land_use = list(unlist(degauss_intersects_parcel_land_use, recursive = TRUE, use.names = FALSE)),
     
     .groups = "drop"
   )
@@ -224,21 +230,41 @@ frank <- frank |>
 
 # combine and export
 all <- bind_rows(ham, frank)
-saveRDS(all, "~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_10.30.25.rds")
+
+all <- all |>
+  select(-c("n_parcels_degauss_intersect", "degauss_intersects_parcel_land_use",
+            "nad_intersects_parcel_land_use", "n_parcels_nad_intersect",
+            ))
+
+geo <- readRDS("~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_10.31.25.rds") |>
+  select(c("nad_address", "addresses_within_100m", "census_tract_id_2020", "dep_index"))
+
+all <- left_join(all, geo, by = "nad_address")
+
+# replaceMTV = 0 with NA
+all <- all |>
+  mutate(across(
+    c(addr_matched_parcel_value, nad_closest_parcel_value,
+      degauss_closest_parcel_value, nad_intersects_value, degauss_intersects_value),
+    ~ na_if(.x, 0)
+  )) |>
+  rename(degauss_intersects_parcel_value = degauss_intersects_value,
+         nad_intersects_parcel_value = nad_intersects_value) |>
+  mutate(addr_matched_parcel_value = ifelse(is.na(addr_matched_parcel_list), NA, addr_matched_parcel_value))
+# MTV NA if parcel ID NA
+
+saveRDS(all, "~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_11.4.25.rds")
 
 ### regenerate frank - problem with degauss_intersect_land_use
-
 #
-saveRDS(ham, "~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_ham_10.30.25.rds")
-saveRDS(frank, "~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_frank_10.30.25.rds")
-
-
-
+#saveRDS(ham, "~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_ham_10.30.25.rds")
+#saveRDS(frank, "~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_frank_10.30.25.rds")
 
 
 #saveRDS(all, "~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_10.13.25.rds")
 
-
+library(tigris)
+options(tigris_use_cache = TRUE)
 dep_index <- 'https://github.com/geomarker-io/dep_index/raw/master/2023/data/ACS_deprivation_index_by_census_tracts.rds' %>% 
   url() %>% 
   gzcon() %>% 
@@ -249,7 +275,6 @@ tracts <- dep_index |>
   filter(substr(census_tract_id_2020, 1, 2) == "39",
          substr(census_tract_id_2020, 3, 5) %in% c("049", "061"))
 
-options(tigris_use_cache = TRUE)
 franklin_tracts <- tracts(state = "39", county = "049", year = 2020, class = "sf")
 hamilton_tracts <- tracts(state = "39", county = "061", year = 2020, class = "sf")
 both <- rbind(franklin_tracts, hamilton_tracts)
@@ -259,16 +284,12 @@ tracts <- tracts |>
   st_as_sf() |>
   select(c(census_tract_id_2020, dep_index))
   
-all_geo <- all_summary |>
+all_geo <- all |>
   st_as_sf(coords = c("nad_lon", "nad_lat"), crs = 4269) |>
   st_transform(st_crs(tracts)) |>
   st_join(tracts) #|>
   #st_drop_geometry()
 
-
-####
-# all_geo <- all_summary |>
-#   st_as_sf(coords = c("nad_lon", "nad_lat"), crs = 4269)
 all_geo <- st_transform(all_geo, 26916)
 
 chunk_size <- 50000
@@ -289,7 +310,9 @@ all_geo$addresses_within_100m <- n_within_100m
 all_geo <- all_geo |>
   st_drop_geometry()
 
-saveRDS(all_geo, "~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_10.21.25.rds")
+saveRDS(all_geo, "~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_10.31.25.rds")
+
+
 
 ####
 # hcv_ham <- readRDS("/Users/carsonhartlage/Desktop/PhD/Parcel Matching/property_code_enforcements_matched_addr.rds")
@@ -361,4 +384,6 @@ ham_hcv_addr <- ham_hcv_addr |>
   summarise(n_violations = n()) |>
   ungroup()
 
-saveRDS(ham_hcv_addr, "~/Documents/GitHub/parcel_matching_evaluation/ham_HCV_10.21.25.rds")
+saveRDS(ham_hcv_addr, "~/Documents/GitHub/parcel_matching_evaluation/ham_HCV_10.2mj1.25.rds")
+
+#####

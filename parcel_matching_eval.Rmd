@@ -30,9 +30,28 @@ library(ggplot2)
 ## Load in & prepare data
 
 ```{r}
-d <- readRDS("~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_10.21.25.rds")
-frank <- filter(d, county == "Franklin")
-ham <- filter(d, county == "Hamilton")
+d <- readRDS("~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_11.4.25.rds")
+
+# d <- d |>
+#   mutate(
+#     nad_intersects_parcel_id = lapply(nad_intersects_parcel_id, function(x) if(length(x) == 0) NA else x),
+#     degauss_intersects_parcel_id = lapply(degauss_intersects_parcel_id, function(x) if(length(x) == 0) NA else x)
+#   )
+
+d <- d |>
+  mutate(
+    nad_intersects_parcel_id = lapply(nad_intersects_parcel_id, function(x) {
+      val <- tryCatch(unlist(x, recursive = TRUE, use.names = FALSE), error = function(e) NA_character_)
+      if (length(val) == 0 || all(is.na(val))) NA_character_ else val
+    }),
+    degauss_intersects_parcel_id = lapply(degauss_intersects_parcel_id, function(x) {
+      val <- tryCatch(unlist(x, recursive = TRUE, use.names = FALSE), error = function(e) NA_character_)
+      if (length(val) == 0 || all(is.na(val))) NA_character_ else val
+    })
+  )
+
+frank <- filter(d, county == "Franklin, OH")
+ham <- filter(d, county == "Hamilton, OH")
 
 threshold_ft <- 328.08333333
 
@@ -58,6 +77,7 @@ frank <- frank |>
            ~ if_else(is.na(degauss_closest_parcel_id), NA, .x))
   )
 
+# add percentages
 distance_rates <- data.frame(
   county = c(rep("Hamilton", 2), rep("Franklin", 2)),
   method = rep(c("NAD_geo", "DeGAUSS_geo"), 2),
@@ -67,6 +87,13 @@ distance_rates <- data.frame(
     sum(ham$degauss_dist_to_closest_parcel > threshold_ft, na.rm = TRUE),
     sum(frank$nad_dist_to_closest_parcel > threshold_ft, na.rm = TRUE),
     sum(frank$degauss_dist_to_closest_parcel > threshold_ft, na.rm = TRUE)
+  ),
+  
+  pct_over_threshold_dist = c(
+    sum(ham$nad_dist_to_closest_parcel > threshold_ft, na.rm = TRUE) / nrow(ham),
+    sum(ham$degauss_dist_to_closest_parcel > threshold_ft, na.rm = TRUE) / nrow(ham),
+    sum(frank$nad_dist_to_closest_parcel > threshold_ft, na.rm = TRUE) / nrow(frank),
+    sum(frank$degauss_dist_to_closest_parcel > threshold_ft, na.rm = TRUE) / nrow(frank)
   )
 )
 
@@ -85,19 +112,20 @@ agreement_equal <- function(col1, col2) {
 }
 
 agreement_equal_parcel <- function(col1, col2) {
-  mapply(function(id, id_list) {
-    if (is.na(id) && (is.null(id_list) || all(is.na(id_list)))) return(TRUE)
-    
-    if (!is.na(id) && !is.null(id_list)) {
-      vals <- unlist(id_list)
-      vals <- vals[!is.na(vals)]
-      if (length(vals) == 0) return(FALSE)
-      return(as.character(id) %in% as.character(vals))
+  mapply(function(ids1, ids2) {
+    if ((is.null(ids1) || all(is.na(ids1))) && (is.null(ids2) || all(is.na(ids2)))) {
+      return(TRUE)
     }
-    
-    FALSE
+
+    vals1 <- na.omit(unlist(ids1))
+    vals2 <- na.omit(unlist(ids2))
+
+    if (length(vals1) == 0 || length(vals2) == 0) return(FALSE)
+
+    any(as.character(vals1) %in% as.character(vals2))
   }, col1, col2, SIMPLIFY = TRUE)
 }
+
 
 agreement_threshold <- function(col1, col2, tol = 0.2) {
   both_na <- is.na(col1) & is.na(col2)
@@ -115,7 +143,11 @@ ham <- ham %>%
     nad_parcel_id_agree = agreement_equal_parcel(nad_closest_parcel_id, addr_matched_parcel_list),
     nad_land_use_value20_agree = agreement_equal(nad_closest_parcel_land_use, addr_matched_parcel_land_use) & agreement_threshold(nad_closest_parcel_value, addr_matched_parcel_value),
     degauss_parcel_id_agree = agreement_equal_parcel(degauss_closest_parcel_id, addr_matched_parcel_list),
-    degauss_land_use_value20_agree = agreement_equal(degauss_closest_parcel_land_use, addr_matched_parcel_land_use) & agreement_threshold(degauss_closest_parcel_value, addr_matched_parcel_value)
+    degauss_land_use_value20_agree = agreement_equal(degauss_closest_parcel_land_use, addr_matched_parcel_land_use) & agreement_threshold(degauss_closest_parcel_value, addr_matched_parcel_value),
+    nad_intersects_parcel_id_agree = agreement_equal_parcel(nad_intersects_parcel_id, addr_matched_parcel_list),
+    nad_intersects_land_use_value20_agree = agreement_equal(nad_intersects_land_use, addr_matched_parcel_land_use) & agreement_threshold(nad_intersects_parcel_value, addr_matched_parcel_value),
+    degauss_intersects_parcel_id_agree = agreement_equal_parcel(degauss_intersects_parcel_id, addr_matched_parcel_list),
+    degauss_intersects_land_use_value20_agree = agreement_equal(degauss_intersects_land_use, addr_matched_parcel_land_use) & agreement_threshold(degauss_intersects_parcel_value, addr_matched_parcel_value)
 )
 
 frank <- frank %>%
@@ -123,45 +155,63 @@ frank <- frank %>%
     nad_parcel_id_agree = agreement_equal_parcel(nad_closest_parcel_id, addr_matched_parcel_list),
     nad_land_use_value20_agree = agreement_equal(nad_closest_parcel_land_use, addr_matched_parcel_land_use) & agreement_threshold(nad_closest_parcel_value, addr_matched_parcel_value),
     degauss_parcel_id_agree = agreement_equal_parcel(degauss_closest_parcel_id, addr_matched_parcel_list),
-    degauss_land_use_value20_agree = agreement_equal(degauss_closest_parcel_land_use, addr_matched_parcel_land_use) & agreement_threshold(degauss_closest_parcel_value, addr_matched_parcel_value)
+    degauss_land_use_value20_agree = agreement_equal(degauss_closest_parcel_land_use, addr_matched_parcel_land_use) & agreement_threshold(degauss_closest_parcel_value, addr_matched_parcel_value),
+    nad_intersects_parcel_id_agree = agreement_equal_parcel(nad_intersects_parcel_id, addr_matched_parcel_list),
+    nad_intersects_land_use_value20_agree = agreement_equal(nad_intersects_land_use, addr_matched_parcel_land_use) & agreement_threshold(nad_intersects_parcel_value, addr_matched_parcel_value),
+    degauss_intersects_parcel_id_agree = agreement_equal_parcel(degauss_intersects_parcel_id, addr_matched_parcel_list),
+    degauss_intersects_land_use_value20_agree = agreement_equal(degauss_intersects_land_use, addr_matched_parcel_land_use) & agreement_threshold(degauss_intersects_parcel_value, addr_matched_parcel_value)
 )
 ```
 
 ```{r}
 rates <- data.frame(
-  county = c(rep("Hamilton County", 3), rep("Franklin County", 3)),
-  method = rep(c("address matching", "geomatching (parcel-based)", "geomatching (range-based)"), 2),
+  county = c(rep("Hamilton County", 5), rep("Franklin County", 5)),
+  method = rep(c("address matching", "geomatching (parcel-based) closest", "geomatching (range-based) closest", "geomatching (parcel-based) intersect", "geomatching (range-based) intersect"), 2),
 
   match_rate = c(
     sum(!is.na(ham$addr_matched_parcel_list)) / nrow(ham),
     sum(!is.na(ham$nad_closest_parcel_id)) / nrow(ham),
     sum(!is.na(ham$degauss_closest_parcel_id)) / nrow(ham),
+    sum(sapply(ham$nad_intersects_parcel_id, function(x) length(x) > 0 && any(!is.na(x)))) / nrow(ham),
+sum(sapply(ham$degauss_intersects_parcel_id, function(x) length(x) > 0 && any(!is.na(x)))) / nrow(ham),
     sum(!is.na(frank$addr_matched_parcel_list)) / nrow(frank),
     sum(!is.na(frank$nad_closest_parcel_id)) / nrow(frank),
-    sum(!is.na(frank$degauss_closest_parcel_id)) / nrow(frank)
+    sum(!is.na(frank$degauss_closest_parcel_id)) / nrow(frank),
+    sum(sapply(frank$nad_intersects_parcel_id, function(x) length(x) > 0 && any(!is.na(x)))) / nrow(frank),
+sum(sapply(frank$degauss_intersects_parcel_id, function(x) length(x) > 0 && any(!is.na(x)))) / nrow(frank)
+
   ),
 
   parcel_id_agree_with_addr = c(
     1,
     sum(ham$nad_parcel_id_agree) / nrow(ham),
     sum(ham$degauss_parcel_id_agree) / nrow(ham),
+    sum(ham$nad_intersects_parcel_id_agree) / nrow(ham),
+    sum(ham$degauss_intersects_parcel_id_agree) / nrow(ham),
     1,
     sum(frank$nad_parcel_id_agree) / nrow(frank),
-    sum(frank$degauss_parcel_id_agree) / nrow(frank)
+    sum(frank$degauss_parcel_id_agree) / nrow(frank),
+    sum(frank$nad_intersects_parcel_id_agree) / nrow(frank),
+    sum(frank$degauss_intersects_parcel_id_agree) / nrow(frank)
   ),
 
   land_use_and_value20_agree_with_addr = c(
     1,
     sum(ham$nad_land_use_value20_agree) / nrow(ham),
     sum(ham$degauss_land_use_value20_agree) / nrow(ham),
+    sum(ham$nad_intersects_land_use_value20_agree) / nrow(ham),
+    sum(ham$degauss_intersects_land_use_value20_agree) / nrow(ham),
     1,
     sum(frank$nad_land_use_value20_agree) / nrow(frank),
-    sum(frank$degauss_land_use_value20_agree) / nrow(frank)
+    sum(frank$degauss_land_use_value20_agree) / nrow(frank),
+    sum(frank$nad_intersects_land_use_value20_agree) / nrow(frank),
+    sum(frank$degauss_intersects_land_use_value20_agree) / nrow(frank)
   )
-) |>
-  mutate(match_rate = round(match_rate, 3),
-         parcel_id_agree_with_addr = round(parcel_id_agree_with_addr, 3),
-         land_use_and_value20_agree_with_addr = round(land_use_and_value20_agree_with_addr, 3))
+) 
+
+rates <- rates |>
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
 
 knitr::kable(rates)
 ```
@@ -354,6 +404,42 @@ ggplot(agreement_df, aes(x = col1, y = col2, fill = count)) +
        fill = "Count")
 ```
 
+## Value agreement
+```{r, eval=FALSE}
+ham_values <- ham |>
+  filter(
+    !is.na(addr_matched_parcel_value) & 
+    (
+      addr_matched_parcel_land_use == "single family dwelling" #&
+      #nad_closest_parcel_land_use == "single family dwelling" |
+      #degauss_closest_parcel_land_use == "single family dwelling" |
+      #nad_intersects_land_use == "single family dwelling" #|
+      #degauss_intersects_land_use == "single family dwelling"
+    )
+  )
+
+mean(ham_values$addr_matched_parcel_value / ham_values$nad_intersects_parcel_value, na.rm = TRUE)
+
+ham_values <- ham |>
+  filter(
+    !is.na(addr_matched_parcel_value) & 
+    (
+      addr_matched_parcel_land_use == "single family dwelling" #&
+      #nad_closest_parcel_land_use == "single family dwelling"
+    )
+  )
+
+mean(ham_values$addr_matched_parcel_value / ham_values$degauss_intersects_parcel_value, na.rm = TRUE)
+
+# SFH correctly matched to SFH
+
+# addresses incorrectly matched to SFH
+
+# SFH addresses incorrectly matched to another address type
+
+#### how to deal with all the NAs?????
+```
+
 ## Distance histograms
 ```{r}
 df_long_ham <- ham %>%
@@ -494,24 +580,32 @@ ham_hc <- ham |>
 ### Agreement stats, unweighted
 ```{r}
 rates <- data.frame(
-  method = c("addr", "NAD_geo", "DeGAUSS_geo"),
+  method = c("addr", "NAD_geo_centroid", "DeGAUSS_geo_centroid",
+             "NAD_geo_polygon", "DeGAUSS_geo_polygon"),
 
   match_rate = c(
     sum(!is.na(ham_hc$addr_matched_parcel_list)) / nrow(ham_hc),
     sum(!is.na(ham_hc$nad_closest_parcel_id)) / nrow(ham_hc),
-    sum(!is.na(ham_hc$degauss_closest_parcel_id)) / nrow(ham_hc)
+    sum(!is.na(ham_hc$degauss_closest_parcel_id)) / nrow(ham_hc),
+    sum(sapply(ham_hc$nad_intersects_parcel_id, function(x) length(x) > 0 && any(!is.na(x)))) / nrow(ham_hc),
+    sum(sapply(ham_hc$degauss_intersects_parcel_id, function(x) length(x) > 0 && any(!is.na(x)))) / nrow(ham_hc)
   ),
 
   parcel_id_agree_with_addr = c(
     1,
     sum(ham_hc$nad_parcel_id_agree) / nrow(ham_hc),
-    sum(ham_hc$degauss_parcel_id_agree) / nrow(ham_hc)
+    sum(ham_hc$degauss_parcel_id_agree) / nrow(ham_hc),
+    sum(ham_hc$nad_intersects_parcel_id_agree) / nrow(ham_hc),
+    sum(ham_hc$degauss_intersects_parcel_id_agree) / nrow(ham_hc)
   ),
 
   land_use_and_value20_agree_with_addr = c(
     1,
     sum(ham_hc$nad_land_use_value20_agree) / nrow(ham_hc),
-    sum(ham_hc$degauss_land_use_value20_agree) / nrow(ham_hc)
+    sum(ham_hc$degauss_land_use_value20_agree) / nrow(ham_hc),
+    sum(ham_hc$nad_intersects_land_use_value20_agree) / nrow(ham_hc),
+    sum(ham_hc$degauss_intersects_land_use_value20_agree) / nrow(ham_hc)
+    
   )
 )
 
@@ -522,24 +616,34 @@ knitr::kable(rates)
 
 ```{r}
 weighted_rates <- data.frame(
-  method = c("address matching", "geomatching (parcel-based)", "geomatching (range-based)"),
+  #method = c("address matching", "geomatching (parcel-based)", "geomatching (range-based)"),
+  method = c("addr", "NAD_geo_centroid", "DeGAUSS_geo_centroid",
+             "NAD_geo_polygon", "DeGAUSS_geo_polygon"),
 
   match_rate = c(
     sum(ifelse(!is.na(ham_hc$addr_matched_parcel_list), ham_hc$n_people, 0)) / sum(ham_hc$n_people),
     sum(ifelse(!is.na(ham_hc$nad_closest_parcel_id), ham_hc$n_people, 0)) / sum(ham_hc$n_people),
-    sum(ifelse(!is.na(ham_hc$degauss_closest_parcel_id), ham_hc$n_people, 0)) / sum(ham_hc$n_people)
-  ),
+    sum(ifelse(!is.na(ham_hc$degauss_closest_parcel_id), ham_hc$n_people, 0)) / sum(ham_hc$n_people),
+    sum(mapply(function(x, n) if(length(x) > 0 && any(!is.na(x))) n else 0,
+             ham_hc$nad_intersects_parcel_id, ham_hc$n_people)) / sum(ham_hc$n_people),
+    sum(mapply(function(x, n) if(length(x) > 0 && any(!is.na(x))) n else 0,
+             ham_hc$degauss_intersects_parcel_id, ham_hc$n_people)) / sum(ham_hc$n_people)
+    ),
 
   parcel_id_agree_with_addr = c(
     1,
     sum(ham_hc$nad_parcel_id_agree * ham_hc$n_people) / sum(ham_hc$n_people),
-    sum(ham_hc$degauss_parcel_id_agree * ham_hc$n_people) / sum(ham_hc$n_people)
+    sum(ham_hc$degauss_parcel_id_agree * ham_hc$n_people) / sum(ham_hc$n_people),
+    sum(ham_hc$nad_intersects_parcel_id_agree * ham_hc$n_people) / sum(ham_hc$n_people),
+    sum(ham_hc$degauss_intersects_parcel_id_agree * ham_hc$n_people) / sum(ham_hc$n_people)
   ),
 
   land_use_and_value20_agree_with_addr = c(
     1,
     sum(ham_hc$nad_land_use_value20_agree * ham_hc$n_people) / sum(ham_hc$n_people),
-    sum(ham_hc$degauss_land_use_value20_agree * ham_hc$n_people) / sum(ham_hc$n_people)
+    sum(ham_hc$degauss_land_use_value20_agree * ham_hc$n_people) / sum(ham_hc$n_people),
+    sum(ham_hc$nad_intersects_land_use_value20_agree * ham_hc$n_people) / sum(ham_hc$n_people),
+    sum(ham_hc$degauss_intersects_land_use_value20_agree * ham_hc$n_people) / sum(ham_hc$n_people)
   )
 ) |>
   mutate(match_rate = round(match_rate, 3),
@@ -607,7 +711,7 @@ ham <- ham |>
   left_join(ham_hcv, join_by("nad_addr" == "addr"))
 ```
 
-## Tract-level deprivation index and address density
+## Tract-level deprivation index and hyperlocal address density
 ```{r}
 ham_by_tract <- ham |>
   group_by(census_tract_id_2020) |>
@@ -699,7 +803,7 @@ spearman_res <- cor.test(
 spearman_res
 ```
 
-```{r}
+```{r, eval=FALSE}
 library(scales)
 
 ham_dep_summary <- ham_by_tract |>
@@ -750,32 +854,47 @@ ham_dep_summary |>  # Optional: make quartile labels prettier
 
 ```{r}
 quartile_agreement <- function(df, name) {
-  # 4×4 contingency table
   agreement_mat <- table(
     Address_Quartile = df$n_addr_quartile,
     Deprivation_Quartile = df$dep_quartile
   )
   
-  # Chi-squared test
   chi_res <- chisq.test(agreement_mat)
   
-  # Display results
   cat("\nAgreement Matrix —", name, "\n")
   print(agreement_mat)
   
   cat("\nChi-squared Test Results —", name, "\n")
   print(chi_res)
   
-  # Optionally return results for further analysis
   invisible(list(matrix = agreement_mat, chi_sq = chi_res))
 }
 
-# Run on your data
 quartile_agreement(ham_by_tract, "Hamilton")
 quartile_agreement(frank_by_tract, "Franklin")
 ```
 
 ```{r}
+p1 <- ggplot(ham_by_tract, aes(x = dep_index, y = mean_n_addr_100m)) +
+  geom_point(alpha = 0.6, color = "blue") +
+  labs(
+    title = "Deprivation Index and\nAddress Density (Hamilton)",
+    x = "Deprivation Index",
+    y = "Mean # of Addresses within 100m"
+    ) +
+  xlim(0, 1) +
+  theme_minimal()
 
+p2 <- ggplot(frank_by_tract, aes(x = dep_index, y = mean_n_addr_100m)) +
+  geom_point(alpha = 0.6, color = "blue") +
+  labs(
+    title = "Deprivation Index and\nAddress Density (Franklin)",
+    x = "Deprivation Index",
+    y = "Mean # of Addresses within 100m"
+    ) +
+  xlim(0, 1) +
+  theme_minimal()
+
+gridExtra::grid.arrange(p1, p2, ncol = 2)
 ```
 
