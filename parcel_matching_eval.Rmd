@@ -704,11 +704,11 @@ weighted_rates |>
 ```
 
 ## Housing code violations
-```{r, eval=FALSE}
-ham_hcv <- readRDS("~/Documents/GitHub/parcel_matching_evaluation/ham_HCV_10.21.25.rds")
-## not matching at all
-ham <- ham |>
-  left_join(ham_hcv, join_by("nad_addr" == "addr"))
+```{r}
+hcv_frank <- readRDS("/Users/carsonhartlage/Documents/GitHub/parcel_matching_evaluation/franklin_hcv.rds")
+
+frank <- frank |>
+  left_join(hcv_frank, join_by("nad_addr" == "addr"))
 ```
 
 ## Tract-level deprivation index and hyperlocal address density
