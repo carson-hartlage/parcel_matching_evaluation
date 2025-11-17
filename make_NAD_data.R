@@ -87,6 +87,7 @@ franklin_parcels <-
   mutate(land_use = as.character(land_use)) |>
   mutate(land_use = recode(land_use, !!!lu_map))
 
+# 250MB
 f2 <- readr::read_csv("https://apps.franklincountyauditor.com/Parcel_CSV/2025/07/Parcel.csv")
 f2 <- f2 |>
   select(parcel_id = "PARCEL ID",
@@ -206,10 +207,10 @@ ham <- ham |>
   mutate(
     nad_intersects_value = map_dbl(nad_intersects_parcel_id, ~ mean(parcel_values_vec[unlist(.x)], na.rm = TRUE)),
     nad_intersects_land_use = map_chr(nad_intersects_parcel_land_use, ~ get_mode_chr(unlist(.x))),
-    n_parcels_nad_intersect = map_int(nad_intersects_parcel_id, ~ length(unlist(.x))),
+    n_parcels_nad_intersect = map_int(nad_intersects_parcel_id, ~ length(unique(unlist(.x)))),
     degauss_intersects_value = map_dbl(degauss_intersects_parcel_id, ~ mean(parcel_values_vec[unlist(.x)], na.rm = TRUE)),
     degauss_intersects_land_use = map_chr(degauss_intersects_parcel_land_use, ~ get_mode_chr(unlist(.x))),
-    n_parcels_degauss_intersect = map_int(degauss_intersects_parcel_id, ~ length(unlist(.x)))
+    n_parcels_degauss_intersect = map_int(degauss_intersects_parcel_id, ~ length(unique(unlist(.x))))
   )
 
 
@@ -222,18 +223,18 @@ frank <- frank |>
   mutate(
     nad_intersects_value = map_dbl(nad_intersects_parcel_id, ~ mean(parcel_values_vec[unlist(.x)], na.rm = TRUE)),
     nad_intersects_land_use = map_chr(nad_intersects_parcel_land_use, ~ get_mode_chr(unlist(.x))),
-    n_parcels_nad_intersect = map_int(nad_intersects_parcel_id, ~ length(unlist(.x))),
+    n_parcels_nad_intersect = map_int(nad_intersects_parcel_id, ~ length(unique(unlist(.x)))),
     degauss_intersects_value = map_dbl(degauss_intersects_parcel_id, ~ mean(parcel_values_vec[unlist(.x)], na.rm = TRUE)),
     degauss_intersects_land_use = map_chr(degauss_intersects_parcel_land_use, ~ get_mode_chr(unlist(.x))),
-    n_parcels_degauss_intersect = map_int(degauss_intersects_parcel_id, ~ length(unlist(.x)))
+    n_parcels_degauss_intersect = map_int(degauss_intersects_parcel_id, ~ length(unique(unlist(.x))))
   )
 
 # combine and export
 all <- bind_rows(ham, frank)
 
 all <- all |>
-  select(-c("n_parcels_degauss_intersect", "degauss_intersects_parcel_land_use",
-            "nad_intersects_parcel_land_use", "n_parcels_nad_intersect",
+  select(-c("degauss_intersects_parcel_land_use",
+            "nad_intersects_parcel_land_use"
             ))
 
 geo <- readRDS("~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_10.31.25.rds") |>

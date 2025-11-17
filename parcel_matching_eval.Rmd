@@ -21,7 +21,7 @@ library(gt)
 library(units)
 library(dplyr)
 library(purrr)
-library(knitr)
+#library(knitr)
 library(tidyr)
 library(sf)
 library(ggplot2)
@@ -31,6 +31,12 @@ library(ggplot2)
 
 ```{r}
 d <- readRDS("~/Documents/GitHub/parcel_matching_evaluation/NAD_matching_data_11.4.25.rds")
+
+dd <- as.data.frame(d$nad_addr)
+dd <- dd |>
+  mutate(nad_addr_to_merge = addr::addr(glue::glue("{street_number} {street_name} {street_type} Anytown XX {zip_code}"))) 
+d <- d |>
+  mutate(nad_addr_to_merge = dd$nad_addr_to_merge)
 
 # d <- d |>
 #   mutate(
@@ -166,7 +172,7 @@ frank <- frank %>%
 ```{r}
 rates <- data.frame(
   county = c(rep("Hamilton County", 5), rep("Franklin County", 5)),
-  method = rep(c("address matching", "geomatching (parcel-based) closest", "geomatching (range-based) closest", "geomatching (parcel-based) intersect", "geomatching (range-based) intersect"), 2),
+  method = rep(c("address tag matching", "parcel-based geomatching to centroid", "range-based geomatching to centroid", "parcel-based geomatching to polygon", "range-based geomatching to polygon"), 2),
 
   match_rate = c(
     sum(!is.na(ham$addr_matched_parcel_list)) / nrow(ham),
@@ -210,7 +216,7 @@ sum(sapply(frank$degauss_intersects_parcel_id, function(x) length(x) > 0 && any(
 ) 
 
 rates <- rates |>
-  mutate(across(where(is.numeric), ~ round(.x, 3)))
+  mutate(across(where(is.numeric), ~ round(.x*100, 2)))
 
 
 knitr::kable(rates)
@@ -221,9 +227,9 @@ rates |>
   gt(groupname_col = "county") |>
   cols_label(
     method = "Matching Method",
-    match_rate = "Non-Missing Rate",
-    parcel_id_agree_with_addr = html("Parcel ID<br>Agreement"),
-    land_use_and_value20_agree_with_addr = gt::html("Land Use & Value<br>Agreement")
+    match_rate = "Non-Missing Rate (%)",
+    parcel_id_agree_with_addr = html("Parcel ID<br>Agreement (%)"),
+    land_use_and_value20_agree_with_addr = gt::html("Land Use & Value<br>Agreement (%)")
   ) |>
   tab_style(
     style = cell_text(align = "left"),
@@ -260,6 +266,7 @@ rates |>
     )
   ) |>
   cols_width(
+    method ~ px(200)
     everything() ~ px(140)
   ) |>
   tab_options(
@@ -580,8 +587,7 @@ ham_hc <- ham |>
 ### Agreement stats, unweighted
 ```{r}
 rates <- data.frame(
-  method = c("addr", "NAD_geo_centroid", "DeGAUSS_geo_centroid",
-             "NAD_geo_polygon", "DeGAUSS_geo_polygon"),
+  method = c("address tag matching", "parcel-based geomatching to centroid", "range-based geomatching to centroid", "parcel-based geomatching to polygon", "range-based geomatching to polygon"),
 
   match_rate = c(
     sum(!is.na(ham_hc$addr_matched_parcel_list)) / nrow(ham_hc),
@@ -613,12 +619,10 @@ knitr::kable(rates)
 ```
 
 ### Agreement stats, weighted
-
 ```{r}
 weighted_rates <- data.frame(
   #method = c("address matching", "geomatching (parcel-based)", "geomatching (range-based)"),
-  method = c("addr", "NAD_geo_centroid", "DeGAUSS_geo_centroid",
-             "NAD_geo_polygon", "DeGAUSS_geo_polygon"),
+  method = c("address tag matching", "parcel-based geomatching to centroid", "range-based geomatching to centroid", "parcel-based geomatching to polygon", "range-based geomatching to polygon"),
 
   match_rate = c(
     sum(ifelse(!is.na(ham_hc$addr_matched_parcel_list), ham_hc$n_people, 0)) / sum(ham_hc$n_people),
@@ -656,12 +660,12 @@ knitr::kable(weighted_rates)
 
 ```{r, eval=FALSE}
 weighted_rates |>
-  gt(groupname_col = "county") |>
+  gt() |>
   cols_label(
     method = "Matching Method",
-    match_rate = "Non-Missing Rate",
-    parcel_id_agree_with_addr = html("Parcel ID<br>Agreement"),
-    land_use_and_value20_agree_with_addr = gt::html("Land Use & Value<br>Agreement")
+    match_rate = "Non-Missing Rate (%)",
+    parcel_id_agree_with_addr = html("Parcel ID<br>Agreement (%)"),
+    land_use_and_value20_agree_with_addr = gt::html("Land Use & Value<br>Agreement (%)")
   ) |>
   tab_style(
     style = cell_text(align = "left"),
@@ -698,6 +702,7 @@ weighted_rates |>
     )
   ) |>
   cols_width(
+    method ~ px(200),
   everything() ~ px(140)
   )
 
@@ -705,11 +710,68 @@ weighted_rates |>
 
 ## Housing code violations
 ```{r}
-hcv_frank <- readRDS("/Users/carsonhartlage/Documents/GitHub/parcel_matching_evaluation/franklin_hcv.rds")
+hcv_frank <- readRDS("/Users/carsonhartlage/Documents/GitHub/parcel_matching_evaluation/franklin_hcv_by_address.rds")
+hcv_ham <- readRDS("/Users/carsonhartlage/Documents/GitHub/parcel_matching_evaluation/hamilton_hcv_by_address.rds")
 
-frank <- frank |>
-  left_join(hcv_frank, join_by("nad_addr" == "addr"))
+#hcv <- vctrs::vec_rbind(hcv_frank, hcv_ham)
+
+frank_hcv <- frank |>
+  left_join(hcv_frank, join_by("nad_addr_to_merge" == "addr")) |>
+  filter(!is.na(n_violations))
+
+ham_hcv <- ham |>
+  left_join(hcv_ham, join_by("nad_addr_to_merge" == "addr")) |>
+  filter(!is.na(n_violations))
 ```
+
+```{r}
+rates <- data.frame(
+  county = c(rep("Hamilton County", 5), rep("Franklin County", 5)),
+  method = c(rep(c("address matching", "parcel-based geomatching to centroid", "range-based geomatching to centroid", "parcel-based geomatching to polygon", "range-based geomatching to polygon"), 2)),
+
+  match_rate = c(
+    sum(!is.na(ham_hcv$addr_matched_parcel_list)) / nrow(ham_hcv),
+    sum(!is.na(ham_hcv$nad_closest_parcel_id)) / nrow(ham_hcv),
+    sum(!is.na(ham_hcv$degauss_closest_parcel_id)) / nrow(ham_hcv),
+    sum(sapply(ham_hcv$nad_intersects_parcel_id, function(x) length(x) > 0 && any(!is.na(x)))) / nrow(ham_hcv),
+    sum(sapply(ham_hcv$degauss_intersects_parcel_id, function(x) length(x) > 0 && any(!is.na(x)))) / nrow(ham_hcv),
+    sum(!is.na(frank_hcv$addr_matched_parcel_list)) / nrow(frank_hcv),
+    sum(!is.na(frank_hcv$nad_closest_parcel_id)) / nrow(frank_hcv),
+    sum(!is.na(frank_hcv$degauss_closest_parcel_id)) / nrow(frank_hcv),
+    sum(sapply(frank_hcv$nad_intersects_parcel_id, function(x) length(x) > 0 && any(!is.na(x)))) / nrow(frank_hcv),
+    sum(sapply(frank_hcv$degauss_intersects_parcel_id, function(x) length(x) > 0 && any(!is.na(x)))) / nrow(frank_hcv)
+  ),
+
+  parcel_id_agree_with_addr = c(
+    1,
+    sum(ham_hcv$nad_parcel_id_agree) / nrow(ham_hcv),
+    sum(ham_hcv$degauss_parcel_id_agree) / nrow(ham_hcv),
+    sum(ham_hcv$nad_intersects_parcel_id_agree) / nrow(ham_hcv),
+    sum(ham_hcv$degauss_intersects_parcel_id_agree) / nrow(ham_hcv),
+    1,
+    sum(frank_hcv$nad_parcel_id_agree) / nrow(frank_hcv),
+    sum(frank_hcv$degauss_parcel_id_agree) / nrow(frank_hcv),
+    sum(frank_hcv$nad_intersects_parcel_id_agree) / nrow(frank_hcv),
+    sum(frank_hcv$degauss_intersects_parcel_id_agree) / nrow(frank_hcv)
+  ) #,
+
+  # land_use_and_value20_agree_with_addr = c(
+  #   1,
+  #   sum(ham_hcv$nad_land_use_value20_agree) / nrow(ham_hcv),
+  #   sum(ham_hcv$degauss_land_use_value20_agree) / nrow(ham_hcv),
+  #   sum(ham_hcv$nad_intersects_land_use_value20_agree) / nrow(ham_hcv),
+  #   sum(ham_hcv$degauss_intersects_land_use_value20_agree) / nrow(ham_hcv),
+  #   1,
+  #   sum(frank_hcv$nad_land_use_value20_agree) / nrow(frank_hcv),
+  #   sum(frank_hcv$degauss_land_use_value20_agree) / nrow(frank_hcv),
+  #   sum(frank_hcv$nad_intersects_land_use_value20_agree) / nrow(frank_hcv),
+  #   sum(frank_hcv$degauss_intersects_land_use_value20_agree) / nrow(frank_hcv)
+  # )
+)
+
+knitr::kable(rates)
+```
+
 
 ## Tract-level deprivation index and hyperlocal address density
 ```{r}
@@ -765,7 +827,7 @@ summarize_by_quartile <- function(df, name) {
     #mutate(dep_quartile = ntile(dep_index, 4)) |>
     group_by(dep_quartile) |>
     summarise(across(all_of(cols_to_summarize), mean, na.rm = TRUE)) |>
-    kable(digits = 3, caption = paste("Mean Metrics by Deprivation Quartile,", name))
+    knitr::kable(digits = 3, caption = paste("Mean Metrics by Deprivation Quartile,", name))
 }
 
 summarize_by_quartile(ham_by_tract, "Hamilton")
@@ -778,7 +840,7 @@ summarize_by_addr_quartile <- function(df, name) {
   df |>
     group_by(n_addr_quartile) |>
     summarise(across(all_of(cols_to_summarize), mean, na.rm = TRUE)) |>
-    kable(digits = 3, caption = paste("Mean Metrics by Address Density Quartile,", name))
+    knitr::kable(digits = 3, caption = paste("Mean Metrics by Address Density Quartile,", name))
 }
 
 summarize_by_addr_quartile(ham_by_tract, "Hamilton")
@@ -817,6 +879,7 @@ ham_dep_summary <- ham_by_tract |>
 ham_dep_summary |>  # Optional: make quartile labels prettier
   gt(rowname_col = "dep_quartile") |> 
   cols_label(
+    dep_quartile = "Tract-level Deprivation Index Quartile"
     addr_match_rate = "Address Matching Non-Missing Rate",
     mean_n_addr_100m = "Mean # Addresses within 100m"
   ) |>
